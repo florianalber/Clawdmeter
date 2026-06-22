@@ -381,7 +381,7 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_clear_flag(usage_group, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(usage_group, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-    make_usage_panel(usage_group, L.content_y, "Current",
+    make_usage_panel(usage_group, L.content_y, "5h-Fenster",
                      &lbl_session_pct, &lbl_session_label,
                      &bar_session, &lbl_session_reset);
     make_usage_panel(usage_group,
