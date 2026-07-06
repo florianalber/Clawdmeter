@@ -11,6 +11,7 @@ RX_CHAR_UUID="4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID="4c41555a-4465-7669-6365-000000000004"
 POLL_INTERVAL=60
 TICK=5
+SERVICES_RESOLVED_TIMEOUT=15  # seconds to wait for GATT discovery after link connect
 SAVED_MAC_FILE="$HOME/.config/claude-usage-monitor/ble-address"
 REFRESH_FLAG="/tmp/claude-usage-refresh-$$"
 DBUS_DEST="org.bluez"
@@ -37,6 +38,25 @@ is_connected() {
     local path
     path=$(mac_to_dbus_path "$DEVICE_MAC")
     busctl get-property "$DBUS_DEST" "$path" org.bluez.Device1 Connected 2>/dev/null | grep -q "true"
+}
+
+# BlueZ flips Device1.Connected as soon as the link-layer connects, well
+# before GATT service discovery finishes (a separate ServicesResolved
+# property). Without this wait, the characteristic lookup below can spin
+# forever on a stalled discovery while is_connected() stays true, since
+# the "connect if not connected" branch is never re-entered in that state.
+wait_for_services_resolved() {
+    local path
+    path=$(mac_to_dbus_path "$DEVICE_MAC")
+    local waited=0
+    while (( waited < SERVICES_RESOLVED_TIMEOUT )); do
+        if busctl get-property "$DBUS_DEST" "$path" org.bluez.Device1 ServicesResolved 2>/dev/null | grep -q "true"; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
 }
 
 # Load saved MAC address
@@ -199,6 +219,7 @@ poll() {
 
     local headers
     headers=$(curl -s -D - -o /dev/null \
+        --connect-timeout 5 --max-time 15 \
         "https://api.anthropic.com/v1/messages" \
         -H "Authorization: Bearer $token" \
         -H "anthropic-version: 2023-06-01" \
@@ -270,7 +291,17 @@ while true; do
         }
     fi
 
-    # Find the GATT characteristic
+    # Wait for GATT discovery, then find the characteristic. If discovery
+    # never finishes, force a disconnect so the reconnect branch above runs
+    # again next iteration instead of spinning here indefinitely — is_connected
+    # alone never goes false in that state, and it gates whether connect_device
+    # runs again.
+    if ! wait_for_services_resolved; then
+        log "Error: GATT services never resolved, forcing reconnect"
+        bluetoothctl disconnect "$DEVICE_MAC" &>/dev/null
+        continue
+    fi
+
     RX_CHAR_PATH=$(find_char_path_by_uuid "$RX_CHAR_UUID")
     if [ -z "$RX_CHAR_PATH" ]; then
         log "Error: RX characteristic not found, retrying..."

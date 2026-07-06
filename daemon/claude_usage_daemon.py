@@ -352,7 +352,11 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     log(f"Connecting to {display}...")
     client = BleakClient(target)
     try:
-        await client.connect()
+        # Explicit bound rather than relying on bleak's backend default — a
+        # stuck connect (flaky peripheral, CoreBluetooth wedged) would
+        # otherwise block this coroutine, and with it every subsequent poll,
+        # indefinitely.
+        await client.connect(timeout=20.0)
     except (BleakError, asyncio.TimeoutError) as e:
         log(f"Connection failed: {e}")
         return False
